@@ -1,7 +1,7 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const Alpaca = require('@alpacahq/alpaca-trade-api')
-
+const fetch = require('node-fetch');
 
 const app = express();
 app.use(bodyParser.json());
@@ -15,7 +15,8 @@ const firestore = require('firebase/firestore');
 const auth = firebaseAuth.getAuth(firebaseApp);
 const db = firestore.getFirestore(firebaseApp);
 
-const {dbAdmin, authAdmin} = require('./firebaseAdmin.js')
+const {dbAdmin, authAdmin} = require('./firebaseAdmin.js');
+const { post } = require('@alpacahq/alpaca-trade-api/dist/resources/order.js');
 
 const options = {
   year: 'numeric',
@@ -35,19 +36,21 @@ app.get('/', (req, res) => {
 
 app.post('/auth/signup', async (req, res) => {
   try {
+    console.log("Signing Up")
     const {email, password} = req.body
-
+    console.log("Email: " + email)
+    console.log("Password" + password)
     const userRecord = await authAdmin.createUser({
       email,
       password,
     });
-
+    console.log("Created User")
     let userRef = dbAdmin.collection('User').doc(userRecord.uid)
     await userRef.create({
       userId: userRecord.uid,
       setup: false
     })
-
+    console.log("Newly created userId: " + userRecord.uid)
     res.status(200).json(userRecord.uid);
     
   } catch (error) {
@@ -57,8 +60,15 @@ app.post('/auth/signup', async (req, res) => {
 
 app.get('/auth/signin', async (req, res) => {
   try {
+    console.log("Signing In")
+
     const {email, password} = req.body;
+    console.log("Email: " + email)
+    console.log("Password" + password)
+
     const user = await firebaseAuth.signInWithEmailAndPassword(auth, email, password)
+    console.log("Signed In userId: " + user.user.uid)
+
     res.status(200).json(user.user.uid)
   } catch (error) {
     console.error('Error signing in user:', error);
@@ -68,15 +78,24 @@ app.get('/auth/signin', async (req, res) => {
 
 app.post('/setup/initialsetup', async(req, res) => {
   try {
+    console.log("Doing initial setup")
+
     const {userId, username, age} = req.body
+    console.log("UserId: " + userId)
+    console.log("username: " + username)
+    console.log("age: " + age.toString())
+
     let userRef = dbAdmin.collection('User').doc(userId)
 
     await userRef.set({
       userId: userId,
       username: username,
       age: age,
+      reliability: 75,
       setup: true
     })
+
+    console.log("Successfully created user")
 
     res.status(200).json({
       success: true
@@ -92,7 +111,14 @@ app.post('/setup/initialsetup', async(req, res) => {
 
 app.post('/accounts/create', async(req, res) => {
   try {
+    console.log("Creating paper account")
     const {userId, accountName, alpacaKey, alpacaSecretKey, startingBalance} = req.body
+
+    console.log("userId: " + userId)
+    console.log("accountName: " + accountName)
+    console.log("alpacaKey: " + alpacaKey)
+    console.log("alpacaSecretKey: ", alpacaSecretKey)
+
     let paperAccountRef = dbAdmin.collection("PaperAccount").doc(userId+"_"+accountName)
 
     await paperAccountRef.create({
@@ -102,6 +128,7 @@ app.post('/accounts/create', async(req, res) => {
       alpacaSecretKey: alpacaSecretKey,
       profit: 0
     })
+    console.log("Successfully created paper account")
 
     res.status(200).json({
       success: true
@@ -117,15 +144,19 @@ app.post('/accounts/create', async(req, res) => {
 
 app.get('/accounts/get', async(req, res) => {
   try {
+    console.log("Getting paper accounts")
     const {userId} = req.query;
+    console.log("userId: " + userId)
+
     let paperCollectionRef = dbAdmin.collection("PaperAccount");
 
     let result = []
     await paperCollectionRef.where('userId', '==', userId).get().then((querySnapshot) => {
       querySnapshot.forEach((doc) => {
-        console.log(doc.data())
         result.push(doc.data())
       })
+      console.log("Successfully got the following paper accounts: ")
+      console.log(result)
       res.status(200).json({
         success: true,
         paperAccounts: result
@@ -142,8 +173,12 @@ app.get('/accounts/get', async(req, res) => {
 
 app.get('/account/portfolioHistory', async(req, res) => {
   try {
-    const {userId, accountName} = req.body
+    console.log("Retrieving portfolio history")
 
+    const {userId, accountName} = req.query
+
+    console.log("userId" + userId)
+    console.log("accountName" + accountName)
 
     let paperAccountRef = dbAdmin.collection("PaperAccount").doc(userId+"_"+accountName);
     let publicKey = null
@@ -151,7 +186,6 @@ app.get('/account/portfolioHistory', async(req, res) => {
 
     await paperAccountRef.get().then((doc) => {
       if (doc.exists) {
-        console.log(doc.data())
         publicKey = doc.data().alpacaKey
         privateKey = doc.data().alpacaSecretKey
       } else {
@@ -161,6 +195,9 @@ app.get('/account/portfolioHistory', async(req, res) => {
       console.error("Error getting document", error)
     })
     
+    console.log("publicKey: " + publicKey)
+    console.log("privateKey: " + privateKey)
+
     const options = {
       keyId: publicKey,
       secretKey: privateKey,
@@ -175,18 +212,22 @@ app.get('/account/portfolioHistory', async(req, res) => {
     // Format the date as "YYYY-MM-DD"
     const yearAgoDate = currentDate.toISOString().slice(0, 10);
 
+    
     const portfolioHistory = await alpaca.getPortfolioHistory({
       date_start: yearAgoDate,
       period: 'intraday',
       timeframe: '5Min'
       
     });
-
+    console.log("Retrieved the following portfolio history: ")
+    console.log(portfolioHistory)
 
     res.status(200).json({
       success: true,
       timestamp: portfolioHistory.timestamp,
-      equity: portfolioHistory.equity
+      equity: portfolioHistory.equity,
+      profit_loss_pct: portfolioHistory.profit_loss_pct,
+      profit_loss: portfolioHistory.profit_loss
     })
 
   } catch (error) {
@@ -200,7 +241,13 @@ app.get('/account/portfolioHistory', async(req, res) => {
 
 app.post('/stock/buy', async(req, res) => {
   try {
+    console.log("Buying stock")
     const {userId, accountName, stockSymbol, quantity} = req.body;
+
+    console.log("userId: " + userId)
+    console.log("accountName: " + accountName)
+    console.log("stockSymbol: " + stockSymbol)
+    console.log("quantity: " + quantity.toString())
     let paperAccountRef = dbAdmin.collection("PaperAccount").doc(userId+"_"+accountName);
   
     let publicKey = null
@@ -208,7 +255,6 @@ app.post('/stock/buy', async(req, res) => {
 
     await paperAccountRef.get().then((doc) => {
       if (doc.exists) {
-        console.log(doc.data())
         publicKey = doc.data().alpacaKey
         privateKey = doc.data().alpacaSecretKey
       } else {
@@ -218,6 +264,8 @@ app.post('/stock/buy', async(req, res) => {
       console.error("Error getting document", error)
     })
 
+    console.log("publicKey: " + publicKey)
+    console.log("privateKey: " + privateKey)
 
     const options = {
       keyId: publicKey,
@@ -234,7 +282,7 @@ app.post('/stock/buy', async(req, res) => {
       type: 'market',
       time_in_force: "day",
     })
-
+    console.log("Successfully bought stock")
     res.status(200).json({
       success: true
     })
@@ -250,7 +298,14 @@ app.post('/stock/buy', async(req, res) => {
 
 app.post('/stock/sell', async(req, res) => {
   try {
+    console.log("Selling stock")
     const {userId, accountName, stockSymbol, quantity} = req.body;
+
+    console.log("userId: " + userId)
+    console.log("accountName: " + accountName)
+    console.log("stockSymbol: " + stockSymbol)
+    console.log("quantity: " + quantity.toString())
+
     let paperAccountRef = dbAdmin.collection("PaperAccount").doc(userId+"_"+accountName);
   
     let publicKey = null
@@ -268,8 +323,9 @@ app.post('/stock/sell', async(req, res) => {
       console.error("Error getting document", error)
     })
 
-    console.log(publicKey)
-    console.log(privateKey)
+    console.log("publicKey: " + publicKey)
+    console.log("privateKey: " + privateKey)
+
     const options = {
       keyId: publicKey,
       secretKey: privateKey,
@@ -286,6 +342,8 @@ app.post('/stock/sell', async(req, res) => {
       time_in_force: "day",
     })
 
+    console.log("Successfully sold stock")
+
     res.status(200).json({
       success: true
     })
@@ -301,7 +359,13 @@ app.post('/stock/sell', async(req, res) => {
 
 app.post('/social/post', async(req, res) => {
   try {
+    console.log("Creating a post")
     const {userId, stockSymbol, content} = req.body
+
+    console.log("userId: " + userId)
+    console.log("stockSymbol: " + stockSymbol)
+    console.log("content: " + content)
+    
     const postId = Date.now().toString();
     let username = null;
     const userRef = dbAdmin.collection('User').doc(userId);
@@ -316,6 +380,8 @@ app.post('/social/post', async(req, res) => {
       console.log("Error getting user document " + error)
     })
 
+    console.log("username: " + username)
+
     const postRef = dbAdmin.collection("Posts").doc(postId);
 
     const date = getTimeSeconds()
@@ -328,6 +394,7 @@ app.post('/social/post', async(req, res) => {
       content: content,
       timestamp: date
     })
+    console.log("Successfully created post")
 
     res.status(200).json({
       success: true,
@@ -350,7 +417,12 @@ app.post('/social/post', async(req, res) => {
 
 app.post('/social/comment', async(req, res) => {
   try {
+    console.log("Creating commment")
     const {postId, userId, content} = req.body;
+
+    console.log("postId:" + postId)
+    console.log("userId: " + userId)
+    console.log("content: " + content)
 
     let username = null;
     const userRef = dbAdmin.collection('User').doc(userId);
@@ -364,6 +436,9 @@ app.post('/social/comment', async(req, res) => {
     }).catch((error) => {
       console.log("Error getting user document " + error)
     })
+
+    console.log("username: " + username)
+
     const commentId = Date.now().toString()
     const commentRef = dbAdmin.collection("Posts").doc(postId).collection("Comments").doc(commentId)
 
@@ -377,6 +452,7 @@ app.post('/social/comment', async(req, res) => {
       content: content,
       timestamp: formattedDate
     })
+    console.log("Successfully created comment")
 
     res.status(200).json({
       success: true,
@@ -398,18 +474,79 @@ app.post('/social/comment', async(req, res) => {
 
 app.post('/social/rating', async(req, res) => {
   try {
+    console.log("Creating rating")
     const {userId, postId, upvote} = req.body;
+    
+    console.log("userId: " + userId)
+    console.log("postId: " + postId)
+    console.log("upvote: " + upvote)
 
     const ratingRef = dbAdmin.collection("Posts").doc(postId).collection("Ratings").doc(userId)
+
+
+    let offset = 0
+
+    await ratingRef.get()
+    .then((docSnapshot) => {
+      if (docSnapshot.exists) {
+        const deletedData = docSnapshot.data();
+        console.log('Data before deletion:', deletedData);
+        offset = docSnapshot.data().upvote ? -2 : 5
+        // Now, delete the document
+        ratingRef.delete()
+          .then(() => {
+            console.log('Document successfully deleted.');
+          })
+          .catch((error) => {
+            console.error('Error deleting document: ', error);
+          });
+      } else {
+        console.log('No preexisting rating for this post and user');
+      }
+    })
+    .catch((error) => {
+      console.error('Error reading document: ', error);
+    });
+
+    console.log("Offset: ", offset)
 
     await ratingRef.create({
       userId: userId,
       upvote: upvote
     })
 
+    console.log("Successfully created rating")
+
+    const postRef = dbAdmin.collection("Posts").doc(postId)
+
+
+    let postUserId = null
+    await postRef.get().then((doc) => {
+      postUserId = doc.data().userId
+    })
+
+    console.log("Post userId: ", postUserId)
+
+    const userRef = dbAdmin.collection("User").doc(postUserId);
+
+    let postUserReliability = null
+    await userRef.get().then((doc) => {
+      postUserReliability = doc.data().reliability;
+    })
+
+    console.log("Post user reliability is: ", postUserReliability);
+
+    const updatedReliability = {
+      reliability: upvote ? postUserReliability + 2 + offset : postUserReliability - 5 + offset
+    }
+
+    await userRef.update(updatedReliability).then(() => {
+      console.log("Successfully updated reliability")
+    })
+
     res.status(200).json({
       success: true,
-      message: "Successfully created rating"
+      message: "Successfully created rating and updated user reliability"
     })
 
   } catch (error) {
@@ -423,9 +560,12 @@ app.post('/social/rating', async(req, res) => {
 
 app.get('/social/getPosts', async(req, res) => {
   try {
-    const {stockSymbol} = req.body;
-    const postRef = dbAdmin.collection("Posts")
+    console.log("Getting social posts")
 
+    const {stockSymbol} = req.body;
+    console.log("stockSymbol: " + stockSymbol)
+
+    const postRef = dbAdmin.collection("Posts")
     const posts = []
     await postRef.where('stockSymbol', '==', stockSymbol).get().then((querySnapshot) => {
       querySnapshot.forEach((doc) => {
@@ -486,7 +626,12 @@ app.get('/social/getPosts', async(req, res) => {
 
 app.get("/stock/history", async(req, res) => {
   try {
-    const {userId, accountName, stockSymbol} = req.query
+    console.log("Getting stock history")
+
+    const {userId, accountName, stockSymbol, timeframe} = req.query
+    console.log("userId: " + userId)
+    console.log("accountName: " + accountName)
+    console.log("stockSymbol: " + stockSymbol)
 
     let paperAccountRef = dbAdmin.collection("PaperAccount").doc(userId+"_"+accountName);
   
@@ -504,6 +649,9 @@ app.get("/stock/history", async(req, res) => {
       console.error("Error getting document", error)
     })
 
+    console.log("publicKey: " + publicKey)
+    console.log("privateKey: " + privateKey)
+
     const options = {
       keyId: publicKey,
       secretKey: privateKey,
@@ -512,29 +660,20 @@ app.get("/stock/history", async(req, res) => {
 
     const alpaca = new Alpaca(options)
     
-    const yearAgo = new Date();
-    yearAgo.setFullYear(yearAgo.getFullYear() - 1);
+    var startDate = new Date();
+    if (timeframe == "Y") {
+      startDate.setFullYear(startDate.getFullYear() - 1);
+    } else if (timeframe == "M") {
+      startDate.setMonth(startDate.getMonth() - 1);
+    } else if (timeframe == "D") {
+      // do nothing
+    }
     
-    const yearAgoDate = yearAgo.toISOString().slice(0, 10);
-
-    const currentDate = new Date();
-
-    // Subtract one day
-    currentDate.setDate(currentDate.getDate() -1);
-    currentDate.setMinutes(currentDate.getMinutes()-60);
-
-    console.log(currentDate)
-    // Format the date as 'YYYY-MM-DD'
-    const year = currentDate.getFullYear();
-    const month = String(currentDate.getMonth() + 1).padStart(2, '0'); // Months are zero-based, so we add 1 and pad with '0'
-    const day = String(currentDate.getDate()).padStart(2, '0');
-    
-    const formattedDate = `${year}-${month}-${day}`;
+    startDate = startDate.toISOString().slice(0, 10);
 
     const bars = alpaca.getBarsV2(stockSymbol, {
-      start: yearAgoDate,
-      end: formattedDate,
-      timeframe: '1D'
+      start: startDate,
+      timeframe: timeframe == "D" ? alpaca.newTimeframe(30, alpaca.timeframeUnit.MIN) : alpaca.newTimeframe(1, alpaca.timeframeUnit.DAY)
     });
     const got = [];
     for await (let b of bars) {
@@ -559,8 +698,11 @@ app.get("/stock/history", async(req, res) => {
 
 app.get('/stock/position', async(req, res) => {
   try {
+    console.log("Getting stock position")
     const {userId, accountName, stockSymbol} = req.body
-
+    console.log("userId: " + userId)
+    console.log("accountName: " + accountName)
+    console.log("stockSymbol: " + stockSymbol)
     let paperAccountRef = dbAdmin.collection("PaperAccount").doc(userId+"_"+accountName);
   
     let publicKey = null
@@ -577,6 +719,9 @@ app.get('/stock/position', async(req, res) => {
       console.error("Error getting document", error)
     })
 
+    console.log("publicKey: " + publicKey)
+    console.log("privateKey: " + privateKey)
+
     const options = {
       keyId: publicKey,
       secretKey: privateKey,
@@ -587,7 +732,7 @@ app.get('/stock/position', async(req, res) => {
 
     const stockPosition = await alpaca.getPosition(stockSymbol);
     console.log(stockPosition)
-    
+    console.log("Successfully retrieved stock position")
     res.status(200).json({
       success: true,
       position: stockPosition
@@ -609,6 +754,118 @@ app.get('/stock/position', async(req, res) => {
     }
   }
 })
+
+app.post('/account/closePositions', async(req, res) => {
+  try {
+    console.log("Getting stock position")
+    const {userId, accountName} = req.body
+    console.log("userId: " + userId)
+    console.log("accountName: " + accountName)
+    let paperAccountRef = dbAdmin.collection("PaperAccount").doc(userId+"_"+accountName);
+  
+    let publicKey = null
+    let privateKey = null
+
+    await paperAccountRef.get().then((doc) => {
+      if (doc.exists) {
+        publicKey = doc.data().alpacaKey
+        privateKey = doc.data().alpacaSecretKey
+      } else {
+        console.log("Error when retrieving paper account")
+      }
+    }).catch((error) => {
+      console.error("Error getting document", error)
+    })
+
+    console.log("publicKey: " + publicKey)
+    console.log("privateKey: " + privateKey)
+
+    const positionsUrl = 'https://paper-api.alpaca.markets/v2/positions'; 
+
+// Create the request headers
+    const headers = {
+      'APCA-API-KEY-ID': publicKey,
+      'APCA-API-SECRET-KEY': privateKey,
+    };
+
+    // Fetch the open positions
+    fetch(positionsUrl, {
+      method: 'DELETE',
+      headers,
+    })
+
+    res.status(200).json({
+      success: true,
+      message: "Successfully closed all positions"
+    })
+  } catch (error) {
+    console.log("Error depositing into acccount", error)
+    res.status(500).json({
+      success: false,
+      message: "Error closing positions"
+    })
+  }
+})
+
+app.get('/account/buyingPower', async(req, res) => {
+  try {
+    console.log("Retrieving account buying power")
+
+    const {userId, accountName} = req.body
+
+    console.log("userId" + userId)
+    console.log("accountName" + accountName)
+
+    let paperAccountRef = dbAdmin.collection("PaperAccount").doc(userId+"_"+accountName);
+    let publicKey = null
+    let privateKey = null
+
+    await paperAccountRef.get().then((doc) => {
+      if (doc.exists) {
+        publicKey = doc.data().alpacaKey
+        privateKey = doc.data().alpacaSecretKey
+      } else {
+        console.log("Error when retrieving paper account")
+      }
+    }).catch((error) => {
+      console.error("Error getting document", error)
+    })
+    
+    console.log("publicKey: " + publicKey)
+    console.log("privateKey: " + privateKey)
+
+    const response = await fetch(`https://paper-api.alpaca.markets/v2/account`, {
+      method: 'GET',
+      headers: {
+        'APCA-API-KEY-ID': publicKey,
+        'APCA-API-SECRET-KEY': privateKey,
+      },
+    });
+    let buyingPower = 0;
+    if (response.ok) {
+      const accountInfo = await response.json();
+      buyingPower = accountInfo.buying_power;
+      console.log('Buying Power:', buyingPower);
+    } else {
+      console.error('Error getting account information:', response.status, await response.text());
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Successfully got buying power",
+      buyingPower: buyingPower
+    })
+
+  } catch (error) {
+    console.log("Error retrieving buying power: ", error)
+    res.status(200).json({
+      success: false,
+      message: "Error retrieving buying power"
+    })
+  }
+})
+
+
 // Start the server
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
