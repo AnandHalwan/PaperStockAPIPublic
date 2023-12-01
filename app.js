@@ -2,9 +2,11 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const Alpaca = require('@alpacahq/alpaca-trade-api')
 const fetch = require('node-fetch');
-
+const assetMap = require('./assetMap.js')
+const cors = require('cors')
 const app = express();
 app.use(bodyParser.json());
+app.use(cors())
 const port = process.env.PORT || 3000; 
 
 
@@ -287,6 +289,41 @@ app.post('/stock/buy', async(req, res) => {
       success: true
     })
 
+    const stockRef = dbAdmin.collection("Stock").doc(stockSymbol);
+    
+    stockRef.get()
+    .then((doc) => {
+      if (doc.exists) {
+        console.log("Stock already exists")
+        const stock = doc.data()
+        const updatedStock = {
+          quantity: stock.quantity + quantity
+        }
+        stockRef.update(updatedStock).then(() => {
+          console.log("Successfully updated stock")
+        })
+        .catch((error) => {
+          console.error("Error updating stock", error)
+        })
+      } else {
+        console.log("Stock does not exist")
+        const newStock = {
+          symbol: stockSymbol,
+          quantity: quantity
+        }
+        stockRef.set(newStock).then(() => {
+          console.log("Successfully created stock")
+        })
+        .catch((error) => {
+          console.error("Error updating stock", error)
+        })
+      }
+
+    })
+    .catch((error) => {
+      console.log("Error getting document:", error);
+    });
+
   } catch (error) {
     console.error('Failed to buy stock', error);
     res.status(500).json({
@@ -348,6 +385,39 @@ app.post('/stock/sell', async(req, res) => {
       success: true
     })
 
+    const stockRef = dbAdmin.collection("Stock").doc(stockSymbol);
+
+    stockRef.get()
+      .then((doc) => {
+        if (doc.exists) {
+          console.log("Stock already exists")
+          const stock = doc.data()
+          const updatedStock = {
+            quantity: stock.quantity - quantity
+          }
+          stockRef.update(updatedStock).then(() => {
+            console.log("Successfully updated stock")
+          }).catch((error) => {
+            console.error("Error updating stock", error)
+          })
+        } else {
+          console.log("Stock does not exist")
+          const newStock = {
+            symbol: stockSymbol,
+            quantity: quantity
+          }
+          stockRef.set(newStock).then(() => {
+            console.log("Successfully created stock")
+          })
+          .catch((error) => {
+            console.error("Error updating stock", error)
+          })
+        }
+      })
+      .catch((error) => {
+        console.log("Error getting document:", error);
+      });
+    
   } catch(error) {
     console.error('Failed to sell stock ' + error);
     res.status(500).json({
@@ -404,6 +474,49 @@ app.post('/social/post', async(req, res) => {
       username: username,
       formattedDate: date
     })
+
+    var today = new Date();
+
+    // Get the date components
+    var dd = String(today.getDate()).padStart(2, '0');
+    var mm = String(today.getMonth() + 1).padStart(2, '0'); // January is 0!
+    var yyyy = today.getFullYear();
+
+    // Concatenate the components with the desired format
+    var formattedDate = mm + '-' + dd + '-' + yyyy;
+    
+    const postDataRef = dbAdmin.collection("PostData").doc(formattedDate);
+
+    postDataRef.get()
+      .then((doc) => {
+        if (doc.exists) {
+          console.log("Post data already exists")
+          const postData = doc.data()
+          const updatedPostData = {
+            count: postData.count + 1
+          }
+          postDataRef.update(updatedPostData).then(() => {
+            console.log("Successfully updated post data")
+          }).catch((error) => {
+            console.error("Error updating post data", error)
+          })
+        } else {
+          console.log("Post data does not exist")
+          const newPostData = {
+            date: formattedDate,
+            count: 1
+          }
+          postDataRef.set(newPostData).then(() => {
+            console.log("Successfully created post data")
+          })
+          .catch((error) => {
+            console.error("Error updating post data", error)
+          })
+        }
+      })
+      .catch((error) => {
+        console.log("Error getting document:", error);
+      });
 
   } catch (error) {
     console.error("Error when posting " + error)
@@ -518,7 +631,6 @@ app.post('/social/rating', async(req, res) => {
     console.log("Successfully created rating")
 
     const postRef = dbAdmin.collection("Posts").doc(postId)
-
 
     let postUserId = null
     await postRef.get().then((doc) => {
@@ -696,6 +808,133 @@ app.get("/stock/history", async(req, res) => {
   }
 })
 
+app.get("/stock/get", async (req, res) => {
+  try {
+    console.log("Getting stock")
+
+    const { userId, accountName, symbol } = req.query
+    let paperAccountRef = dbAdmin.collection("PaperAccount").doc(userId + "_" + accountName);
+
+    let publicKey = null
+    let privateKey = null
+
+    await paperAccountRef.get().then((doc) => {
+      if (doc.exists) {
+        publicKey = doc.data().alpacaKey
+        privateKey = doc.data().alpacaSecretKey
+      } else {
+        console.log("Error when retrieving stock")
+      }
+    }).catch((error) => {
+      console.error("Error getting document", error)
+    })
+
+    console.log("publicKey: " + publicKey)
+    console.log("privateKey: " + privateKey)
+
+    const options = {
+      keyId: publicKey,
+      secretKey: privateKey,
+      paper: true
+    }
+
+    const alpaca = new Alpaca(options)
+    asset = await alpaca.getAsset(symbol)
+    console.log(asset)
+    res.status(200).json({
+      success: true,
+      stock: asset
+    })
+  } catch (error) {
+    console.error("Error getting stock: " + error)
+    res.status(500).json({
+      success: false,
+      message: "Error getting stock"
+    })
+  }
+})
+
+app.get("/stock/snapshots", async (req, res) => {
+  try {
+    console.log("Getting stock snapshots")
+
+    const { userId, accountName, symbols } = req.query
+    let paperAccountRef = dbAdmin.collection("PaperAccount").doc(userId + "_" + accountName);
+
+    let publicKey = null
+    let privateKey = null
+
+    await paperAccountRef.get().then((doc) => {
+      if (doc.exists) {
+        publicKey = doc.data().alpacaKey
+        privateKey = doc.data().alpacaSecretKey
+      } else {
+        console.log("Error when retrieving paper account")
+      }
+    }).catch((error) => {
+      console.error("Error getting document", error)
+    })
+
+    console.log("publicKey: " + publicKey)
+    console.log("privateKey: " + privateKey)
+
+    const options = {
+      keyId: publicKey,
+      secretKey: privateKey,
+      paper: true
+    }
+
+    const alpaca = new Alpaca(options)
+    snapshots = await alpaca.getSnapshots(symbols.split(','))
+
+    var stockList = []
+
+    for (const snapshot of snapshots) {
+      var stock = {
+        symbol: snapshot.symbol,
+        prevcloseprice: snapshot.PrevDailyBar.ClosePrice,
+        closeprice: snapshot.DailyBar.ClosePrice,
+        name: assetMap[snapshot.symbol]
+      }
+      stockList.push(stock)
+    }
+    console.log(stockList)
+    res.status(200).json({
+      success: true,
+      snapshots: stockList
+    })
+  } catch (error) {
+    console.error("Error getting snapshots: " + error)
+    res.status(500).json({
+      success: false,
+      message: "Error getting snapshots"
+    })
+  }
+})
+
+app.get("/stock/company", async (req, res) => {
+  try {
+    console.log("Getting company name")
+
+    const { symbols } = req.query
+    const nameMap = {}
+    for (const symbol of symbols.split(',')) {
+      nameMap[symbol] = assetMap[symbol]
+    }
+    
+    res.status(200).json({
+      success: true,
+      companies: nameMap
+    })
+  } catch (error) {
+    console.error("Error getting company name " + error)
+    res.status(500).json({
+      success: false,
+      message: "Error getting company name"
+    })
+  }
+})
+
 app.get('/stock/position', async(req, res) => {
   try {
     console.log("Getting stock position")
@@ -807,6 +1046,56 @@ app.post('/account/closePositions', async(req, res) => {
   }
 })
 
+app.get('/account/positions', async (req, res) => {
+  try {
+    console.log("Retrieving account positions")
+
+    const { userId, accountName } = req.query
+
+    console.log("userId" + userId)
+    console.log("accountName" + accountName)
+
+    let paperAccountRef = dbAdmin.collection("PaperAccount").doc(userId + "_" + accountName);
+    let publicKey = null
+    let privateKey = null
+
+    await paperAccountRef.get().then((doc) => {
+      if (doc.exists) {
+        publicKey = doc.data().alpacaKey
+        privateKey = doc.data().alpacaSecretKey
+      } else {
+        console.log("Error when retrieving paper account")
+      }
+    }).catch((error) => {
+      console.error("Error getting document", error)
+    })
+
+    console.log("publicKey: " + publicKey)
+    console.log("privateKey: " + privateKey)
+
+    const options = {
+      keyId: publicKey,
+      secretKey: privateKey,
+      paper: true
+    }
+
+    const alpaca = new Alpaca(options)
+    const positions = await alpaca.getPositions()
+    console.log(positions)
+    res.status(200).json({
+      success: true,
+      positions: positions
+    })
+
+  } catch (error) {
+    console.log("Error retrieving positions: ", error)
+    res.status(200).json({
+      success: false,
+      message: "Error retrieving positions"
+    })
+  }
+})
+
 app.get('/account/buyingPower', async(req, res) => {
   try {
     console.log("Retrieving account buying power")
@@ -865,6 +1154,225 @@ app.get('/account/buyingPower', async(req, res) => {
   }
 })
 
+app.get('/account/getAccount', async (req, res) => {
+  try {
+    console.log("Retrieving account info")
+
+    const { userId, accountName } = req.query
+    let paperAccountRef = dbAdmin.collection("PaperAccount").doc(userId + "_" + accountName);
+
+    let publicKey = null
+    let privateKey = null
+
+    await paperAccountRef.get().then((doc) => {
+      if (doc.exists) {
+        publicKey = doc.data().alpacaKey
+        privateKey = doc.data().alpacaSecretKey
+      } else {
+        console.log("Error when retrieving paper account")
+      }
+    }).catch((error) => {
+      console.error("Error getting document", error)
+    })
+
+    console.log("publicKey: " + publicKey)
+    console.log("privateKey: " + privateKey)
+
+    const options = {
+      keyId: publicKey,
+      secretKey: privateKey,
+      paper: true
+    }
+
+    const alpaca = new Alpaca(options)
+    account = await alpaca.getAccount()
+    console.log(account)
+    
+    res.status(200).json({
+      success: true,
+      message: "Successfully got account",
+      account: account
+    })
+
+  } catch (error) {
+    console.log("Error retrieving account: ", error)
+    res.status(200).json({
+      success: false,
+      message: "Error retrieving account"
+    })
+  }
+})
+
+app.get('/account/getOrders', async (req, res) => {
+  try {
+    console.log("Retrieving account orders")
+
+    const { userId, accountName } = req.query
+    let paperAccountRef = dbAdmin.collection("PaperAccount").doc(userId + "_" + accountName);
+
+    let publicKey = null
+    let privateKey = null
+
+    await paperAccountRef.get().then((doc) => {
+      if (doc.exists) {
+        publicKey = doc.data().alpacaKey
+        privateKey = doc.data().alpacaSecretKey
+      } else {
+        console.log("Error when retrieving paper account")
+      }
+    }).catch((error) => {
+      console.error("Error getting document", error)
+    })
+
+    console.log("publicKey: " + publicKey)
+    console.log("privateKey: " + privateKey)
+
+    const options = {
+      keyId: publicKey,
+      secretKey: privateKey,
+      paper: true
+    }
+
+    const alpaca = new Alpaca(options)
+    orders = await alpaca.getOrders({status: 'all', direction: 'desc'})
+    console.log(orders)
+
+    res.status(200).json({
+      success: true,
+      orders: orders
+    })
+
+  } catch (error) {
+    console.log("Error retrieving orders: ", error)
+    res.status(200).json({
+      success: false,
+      message: "Error retrieving orders"
+    })
+  }
+})
+
+app.post('/auth/admin', async(req, res) => {
+  try {
+    const {email, password} = req.body
+    console.log("Email: ", email)
+    console.log("Password: ", password)
+
+    const user = await firebaseAuth.signInWithEmailAndPassword(auth, email, password)
+
+    const userRef = dbAdmin.collection("User").doc(user.user.uid)
+    let userDoc = {}
+    await userRef.get()
+      .then((doc) => {
+        console.log("User document: ", doc.data())
+        userDoc = doc.data()
+      })
+      .catch((error) => {
+        console.error("Error retrieving admin document: ", error)
+      })
+
+    if (userDoc.admin) {
+      res.status(200).json({
+        "userId": user.user.uid,
+        "user": userDoc
+      })
+    } else {
+      console.log("Not an admin")
+      res.status(403).json({})
+    }
+
+
+  } catch (error) {
+    console.error("Error signing in: ", error)
+    res.status(500)
+  }
+})
+
+app.post('/auth/update', async(req, res) => {
+  try {
+    const {adminId, userId, newPassword} = req.body
+
+    console.log("adminId: ", adminId)
+    console.log("userId: ", userId)
+    console.log("newPassword: ", newPassword)
+
+    const adminRef = dbAdmin.collection("User").doc(adminId)
+    let adminDoc = {}
+
+    await adminRef.get()
+      .then((doc) => {
+        console.log("Admin document: ", doc.data())
+        adminDoc = doc.data()
+      })
+
+      if (adminDoc.admin) {
+        await authAdmin.updateUser(userId, {
+          password: newPassword
+        })
+        .then((userRecord) => {
+          console.log("Successfully updated user password: ", userRecord)
+        })
+        .catch((error) => {
+          console.error("Error updating user password: ", error)
+          throw error
+        })
+        res.status(200).json({
+          success: true
+        })
+      } else {
+        console.log("Not an admin")
+        res.status(403).json({})
+      }
+  } catch (error) {
+      console.error("Error updating user password: ", error)
+      res.status(500).json({
+    })
+  }
+})
+
+app.post('/auth/updateUsername', async(req, res) => {
+  try {
+    const {adminId, userId, newUsername} = req.body
+
+    console.log("AdminId: ", adminId)
+    console.log("UserId: ", userId)
+    console.log("New username: ", newUsername)
+
+    const adminRef = dbAdmin.collection("User").doc(adminId)
+    let adminDoc = {}
+
+    await adminRef.get()
+      .then((doc) => {
+        console.log("Admin document: ", doc.data())
+        adminDoc = doc.data()
+      })
+
+    if (adminDoc.admin) {
+      const userRef = dbAdmin.collection("User").doc(userId)
+      await userRef.update({
+        username: newUsername
+      })
+      .then(() => {
+        console.log("Successfully updated username")
+      })
+      .catch((error) => { 
+        console.error("Error updating username: ", error)
+        throw error
+      })
+      res.status(200).json({
+        success: true
+      })
+    } else {
+      console.log("Not an admin")
+      res.status(403).json({})
+    }
+    
+  } catch (error) {
+    console.log("Error updating username: ", error)
+    res.status(500).json({
+
+    })
+  }
+})
 
 // Start the server
 app.listen(port, () => {
